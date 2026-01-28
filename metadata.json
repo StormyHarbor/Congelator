@@ -1,0 +1,5 @@
+{
+  "name": "Freezer Manager",
+  "description": "A stylish freezer inventory management application to track food items, locations, and expiration dates.",
+  "requestFramePermissions": []
+}
