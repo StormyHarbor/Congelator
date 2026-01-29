@@ -2,15 +2,16 @@
 import React, { useState } from 'react';
 import { THEME } from '../constants';
 import { Cloud, ArrowRight, Loader2, Key, Database, Link } from 'lucide-react';
-import { StorageConfig } from '../types';
+import { StorageConfig, FoodItem } from '../types';
 import { api } from '../services/api';
 import { INITIAL_ITEMS } from '../constants';
 
 interface SyncSetupProps {
   onSyncConfigured: (config: StorageConfig) => void;
+  currentItems?: FoodItem[];
 }
 
-export const SyncSetup: React.FC<SyncSetupProps> = ({ onSyncConfigured }) => {
+export const SyncSetup: React.FC<SyncSetupProps> = ({ onSyncConfigured, currentItems }) => {
   const [apiKey, setApiKey] = useState('');
   const [binId, setBinId] = useState('');
   const [mode, setMode] = useState<'create' | 'join'>('create');
@@ -20,7 +21,7 @@ export const SyncSetup: React.FC<SyncSetupProps> = ({ onSyncConfigured }) => {
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!apiKey.trim()) {
-        setError("La clé API (Master Key) est obligatoire.");
+        setError("La clé API est obligatoire.");
         return;
     }
 
@@ -37,14 +38,13 @@ export const SyncSetup: React.FC<SyncSetupProps> = ({ onSyncConfigured }) => {
 
       if (mode === 'create') {
           // Création d'une nouvelle base
-          finalBinId = await api.createDatabase(apiKey.trim(), INITIAL_ITEMS);
+          // Use currentItems if available (preserving data during migration), otherwise INITIAL_ITEMS
+          const dataToUpload = (currentItems && currentItems.length > 0) ? currentItems : INITIAL_ITEMS;
+          finalBinId = await api.createDatabase(apiKey.trim(), dataToUpload);
       } else {
           // Vérification de la base existante
           const configTest: StorageConfig = { apiKey: apiKey.trim(), binId: finalBinId };
-          const isValid = await api.checkConnection(configTest);
-          if (!isValid) {
-              throw new Error("Impossible de se connecter à cette base. Vérifiez l'ID et la Clé.");
-          }
+          await api.checkConnection(configTest);
       }
 
       const config: StorageConfig = {
@@ -58,7 +58,11 @@ export const SyncSetup: React.FC<SyncSetupProps> = ({ onSyncConfigured }) => {
 
     } catch (e: any) {
       console.error(e);
-      setError(e.message || "Erreur de connexion. Vérifiez votre clé API.");
+      if (e.message === 'BIN_NOT_FOUND') {
+         setError("ID de base introuvable. Vérifiez l'ID.");
+      } else {
+         setError(e.message || "Erreur de connexion. Vérifiez votre clé API.");
+      }
     } finally {
       setLoading(false);
     }
@@ -74,7 +78,7 @@ export const SyncSetup: React.FC<SyncSetupProps> = ({ onSyncConfigured }) => {
           </div>
           <h1 className={`text-xl font-bold text-center ${THEME.text}`}>Synchronisation Cloud</h1>
           <p className={`text-sm text-center ${THEME.textLight} mt-2`}>
-            Utilisez une clé permanente pour partager votre stock.
+            Utilise <b>jsonstorage.net</b> pour stocker vos données.
           </p>
         </div>
 
@@ -103,7 +107,7 @@ export const SyncSetup: React.FC<SyncSetupProps> = ({ onSyncConfigured }) => {
         <form onSubmit={handleConnect} className="space-y-4">
              <div className="space-y-1">
                 <label className={`text-xs font-bold uppercase tracking-wider ml-1 ${THEME.textLight} flex items-center`}>
-                    <Key size={12} className="mr-1"/> Clé API (Master Key)
+                    <Key size={12} className="mr-1"/> Clé API (JsonStorage)
                 </label>
                 <input 
                     type="password" 
@@ -113,8 +117,8 @@ export const SyncSetup: React.FC<SyncSetupProps> = ({ onSyncConfigured }) => {
                     placeholder="Collez votre clé ici..."
                     required
                 />
-                <a href="https://jsonbin.io/app/api-keys" target="_blank" rel="noopener noreferrer" className="text-[10px] text-[#2C4642] ml-1 underline flex items-center hover:text-blue-600">
-                    <Link size={8} className="mr-1"/> Obtenir une clé gratuite sur jsonbin.io
+                <a href="https://app.jsonstorage.net/" target="_blank" rel="noopener noreferrer" className="text-[10px] text-[#2C4642] ml-1 underline flex items-center hover:text-blue-600">
+                    <Link size={8} className="mr-1"/> Obtenir une clé gratuite sur jsonstorage.net
                 </a>
              </div>
 
@@ -128,7 +132,7 @@ export const SyncSetup: React.FC<SyncSetupProps> = ({ onSyncConfigured }) => {
                         value={binId}
                         onChange={(e) => setBinId(e.target.value)}
                         className={`w-full py-3 px-4 rounded-xl bg-white/60 border-none ${THEME.text} placeholder-[#2C4642]/30 focus:ring-2 focus:ring-[#2C4642] outline-none transition-all`}
-                        placeholder="Ex: 65e8a..."
+                        placeholder="Ex: cdb60d00-..."
                         required={mode === 'join'}
                     />
                     <p className="text-[10px] text-[#5C7672] ml-1">

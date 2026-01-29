@@ -1,8 +1,8 @@
 
 import React, { useState } from 'react';
 import { THEME } from '../constants';
-import { X, LogOut, KeyRound, User, Database, RefreshCw, Key, Copy } from 'lucide-react';
-import { StorageConfig } from '../types';
+import { X, LogOut, KeyRound, User, Database, RefreshCw, Key, Copy, FileText } from 'lucide-react';
+import { StorageConfig, ActivityLogEntry } from '../types';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -12,6 +12,7 @@ interface SettingsModalProps {
   onChangePasswordClick: () => void;
   gcsConfig: StorageConfig | null;
   onUpdateToken: (token: string) => void;
+  logs: ActivityLogEntry[];
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ 
@@ -21,7 +22,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     onLogout, 
     onChangePasswordClick, 
     gcsConfig, 
-    onUpdateToken 
+    onUpdateToken,
+    logs
 }) => {
   const [newToken, setNewToken] = useState('');
   const [showTokenInput, setShowTokenInput] = useState(false);
@@ -43,6 +45,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
     }
+  };
+
+  const downloadActivityLog = () => {
+    // Format: [DATE (JJ/MM/AA] : [USER)] a [AJOUTE/SUPPRIME] "[ITEM]" dans [CATEGORIE].
+    const lines = logs.map(log => {
+        const dateObj = new Date(log.date);
+        const dateStr = dateObj.toLocaleDateString('fr-FR'); // JJ/MM/AAAA
+        return `[${dateStr}] : ${log.user} a ${log.action} "${log.itemName}" dans ${log.category}.`;
+    });
+
+    const content = lines.join('\n');
+    const dataStr = "data:text/plain;charset=utf-8," + encodeURIComponent(content);
+    const downloadAnchorNode = document.createElement('a');
+    downloadAnchorNode.setAttribute("href",     dataStr);
+    downloadAnchorNode.setAttribute("download", "journal_activite.txt");
+    document.body.appendChild(downloadAnchorNode);
+    downloadAnchorNode.click();
+    downloadAnchorNode.remove();
   };
 
   return (
@@ -117,6 +137,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         )}
 
         <div className="space-y-3">
+          <button
+            onClick={downloadActivityLog}
+            className={`w-full flex items-center p-4 rounded-xl bg-[#2C4642]/5 hover:bg-[#2C4642]/10 transition-colors ${THEME.text} font-medium`}
+          >
+            <FileText size={20} className="mr-3 opacity-70" />
+            Télécharger le journal d'activité
+          </button>
+
           <button
             onClick={() => { onClose(); onChangePasswordClick(); }}
             className={`w-full flex items-center p-4 rounded-xl bg-white/40 hover:bg-white/60 transition-colors ${THEME.text} font-medium`}

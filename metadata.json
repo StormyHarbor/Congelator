@@ -1,5 +1,5 @@
 {
-  "name": "Freezer Manager",
-  "description": "A stylish freezer inventory management application to track food items, locations, and expiration dates.",
+  "name": "Congelator",
+  "description": "Une application de gestion de stockage stylée afin de rappeler toute nourriture qui s'y trouve, son endroit et sa date d'expiration.\n",
   "requestFramePermissions": []
 }

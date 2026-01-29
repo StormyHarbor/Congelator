@@ -10,10 +10,10 @@ import { LoginScreen } from './components/LoginScreen';
 import { SettingsModal } from './components/SettingsModal';
 import { ChangePasswordModal } from './components/ChangePasswordModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
-import { SaveConfirmModal } from './components/SaveConfirmModal';
+import { DownloadConfirmModal } from './components/DownloadConfirmModal';
 import { SyncSetup } from './components/SyncSetup';
 import { THEME } from './constants';
-import { FoodItem, Category, Location, LOCATIONS, StorageConfig } from './types';
+import { FoodItem, Category, Location, LOCATIONS, StorageConfig, ActivityLogEntry } from './types';
 import { api } from './services/api';
 
 // Hardcoded users config
@@ -41,7 +41,9 @@ function App() {
 
   // --- Data State ---
   const [items, setItems] = useState<FoodItem[]>([]);
+  const [logs, setLogs] = useState<ActivityLogEntry[]>([]);
   const [loadingInitial, setLoadingInitial] = useState(false);
+  const [isAddingItem, setIsAddingItem] = useState(false);
 
   // --- UI State ---
   const [selectedCategory, setSelectedCategory] = useState<Category>('Tout');
@@ -55,7 +57,7 @@ function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isChangePassOpen, setIsChangePassOpen] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<string | null>(null);
-  const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
+  const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
 
   // Filter states
   const [showFilters, setShowFilters] = useState(false);
@@ -77,30 +79,26 @@ function App() {
     if (!silent) setLoadingInitial(true);
     
     try {
+      // getDatabase retourne maintenant { items, logs }
       const data = await api.getDatabase(storageConfig);
-      setItems(data);
+      setItems(data.items);
+      setLogs(data.logs);
       setSyncError(false);
       setLastUpdated(new Date());
-    } catch (err) {
+    } catch (err: any) {
       console.error("Sync error:", err);
+      
+      if (err.message === 'BIN_NOT_FOUND') {
+         setStorageConfig(null);
+         localStorage.removeItem('congelator_storage_config');
+         if (!silent) alert("Configuration invalide ou base introuvable. Veuillez reconfigurer la synchronisation.");
+         setLoadingInitial(false);
+         return;
+      }
+
       if (!silent) setSyncError(true);
     } finally {
       if (!silent) setLoadingInitial(false);
-    }
-  };
-
-  const saveDataToCloud = async () => {
-    if (!storageConfig) return;
-    setIsSyncing(true);
-    try {
-      await api.updateDatabase(storageConfig, items);
-      setSyncError(false);
-      setLastUpdated(new Date());
-    } catch (err) {
-      console.error("Save error:", err);
-      setSyncError(true);
-    } finally {
-      setIsSyncing(false);
     }
   };
 
@@ -180,7 +178,11 @@ function App() {
     });
   }, [items, selectedCategory, selectedLocation, searchQuery, startDate, endDate, filterDateType]);
 
-  const handleAddItem = (name: string, category: Category, location: Location) => {
+  const handleAddItem = async (name: string, category: Category, location: Location) => {
+    if (!storageConfig || !currentUser) return;
+
+    setIsAddingItem(true);
+    
     const newItem: FoodItem = {
       id: uuidv4(),
       name,
@@ -189,19 +191,76 @@ function App() {
       dateAdded: new Date().toISOString(),
     };
     
-    // Update local only - No auto save
-    setItems([newItem, ...items]);
+    // Create Log Entry
+    const newLog: ActivityLogEntry = {
+        date: new Date().toISOString(),
+        user: currentUser,
+        action: 'AJOUTE',
+        itemName: name,
+        category: category
+    };
+
+    // Construct new state
+    const newItems = [newItem, ...items];
+    const newLogs = [newLog, ...logs];
+
+    try {
+        // Direct patch to server (items + logs)
+        await api.updateDatabase(storageConfig, newItems, newLogs);
+        // Update local state on success
+        setItems(newItems);
+        setLogs(newLogs);
+        setLastUpdated(new Date());
+        setIsModalOpen(false);
+        setSyncError(false);
+    } catch (err: any) {
+        console.error("Add item error:", err);
+        if (err.message === 'BIN_NOT_FOUND') {
+            alert("Erreur: Base de données introuvable (404).");
+        } else {
+            alert("Erreur lors de la sauvegarde: " + err.message);
+        }
+        setSyncError(true);
+    } finally {
+        setIsAddingItem(false);
+    }
   };
 
   const requestDelete = (id: string) => {
     setItemToDelete(id);
   };
 
-  const confirmDelete = () => {
-    if (itemToDelete) {
-        // Update local only - No auto save
-        setItems(items.filter((item) => item.id !== itemToDelete));
-        setItemToDelete(null);
+  const confirmDelete = async () => {
+    if (itemToDelete && storageConfig && currentUser) {
+        const item = items.find(i => i.id === itemToDelete);
+        const newItems = items.filter((item) => item.id !== itemToDelete);
+        
+        let newLogs = [...logs];
+        if (item) {
+             const log: ActivityLogEntry = {
+                date: new Date().toISOString(),
+                user: currentUser,
+                action: 'SUPPRIME',
+                itemName: item.name,
+                category: item.category
+            };
+            newLogs = [log, ...logs];
+        }
+
+        try {
+            // Sauvegarde immédiate pour persister le log de suppression
+            await api.updateDatabase(storageConfig, newItems, newLogs);
+            setItems(newItems);
+            setLogs(newLogs);
+            setLastUpdated(new Date());
+        } catch (err: any) {
+            console.error("Delete error", err);
+             // On supprime quand même localement pour l'UI, mais on signale l'erreur
+             setItems(newItems); 
+             setSyncError(true);
+        } finally {
+            setItemToDelete(null);
+        }
     }
   };
 
@@ -209,6 +268,16 @@ function App() {
     setStartDate('');
     setEndDate('');
     setSearchQuery('');
+  };
+
+  const handleDownloadBackup = () => {
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(items, null, 2));
+    const downloadAnchorNode = document.createElement('a');
+    downloadAnchorNode.setAttribute("href",     dataStr);
+    downloadAnchorNode.setAttribute("download", "congelator_backup.json");
+    document.body.appendChild(downloadAnchorNode);
+    downloadAnchorNode.click();
+    downloadAnchorNode.remove();
   };
 
   const hasActiveFilters = startDate !== '' || endDate !== '';
@@ -222,7 +291,12 @@ function App() {
 
   // 2. Logged In but No Sync Configured
   if (!storageConfig) {
-    return <SyncSetup onSyncConfigured={(config) => handleUpdateConfig(config)} />;
+    return (
+        <SyncSetup 
+            onSyncConfigured={(config) => handleUpdateConfig(config)} 
+            currentItems={items}
+        />
+    );
   }
 
   // 3. Logged In & Synced (Main App)
@@ -425,7 +499,7 @@ function App() {
 
         <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-[#FCDFB8] via-[#FCDFB8] to-transparent pointer-events-none z-10">
           <div className="flex justify-between items-center pointer-events-auto">
-             {/* Refresh Button (remplace le bouton loupe redondant) */}
+             {/* Refresh Button */}
              <button 
                 onClick={() => loadDataFromCloud(false)}
                 className="w-12 h-12 rounded-full bg-[#2C4642] text-[#FCDFB8] flex items-center justify-center shadow-lg hover:scale-105 transition-transform"
@@ -444,11 +518,11 @@ function App() {
                 <span>Ajouter un aliment</span>
              </button>
              
-             {/* Save Button (remplace les 3 points) */}
+             {/* Download Button (formerly Save) */}
              <button 
-                onClick={() => setIsSaveModalOpen(true)}
+                onClick={() => setIsDownloadModalOpen(true)}
                 className="w-12 h-12 rounded-full border-2 border-[#2C4642] bg-[#FCDFB8] text-[#2C4642] flex items-center justify-center hover:bg-[#2C4642] hover:text-[#FCDFB8] transition-all shadow-md"
-                title="Sauvegarder dans le cloud"
+                title="Télécharger la base de données"
              >
                 <Save size={20} />
              </button>
@@ -459,7 +533,8 @@ function App() {
         <AddFoodModal 
           isOpen={isModalOpen} 
           onClose={() => setIsModalOpen(false)} 
-          onAdd={handleAddItem} 
+          onAdd={handleAddItem}
+          isLoading={isAddingItem}
         />
 
         <SettingsModal 
@@ -477,6 +552,7 @@ function App() {
                   handleUpdateConfig({...storageConfig, apiKey: token});
               }
           }}
+          logs={logs}
         />
 
         <ChangePasswordModal 
@@ -491,10 +567,10 @@ function App() {
           onConfirm={confirmDelete}
         />
 
-        <SaveConfirmModal 
-          isOpen={isSaveModalOpen}
-          onClose={() => setIsSaveModalOpen(false)}
-          onConfirm={saveDataToCloud}
+        <DownloadConfirmModal 
+          isOpen={isDownloadModalOpen}
+          onClose={() => setIsDownloadModalOpen(false)}
+          onConfirm={handleDownloadBackup}
           itemCount={items.length}
         />
       </div>

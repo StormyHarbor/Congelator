@@ -22,9 +22,22 @@ export interface FoodItem {
   dateAdded: string; // ISO Date String
 }
 
+export interface ActivityLogEntry {
+  date: string; // ISO Date String
+  user: string;
+  action: 'AJOUTE' | 'SUPPRIME';
+  itemName: string;
+  category: string;
+}
+
+export interface StorageData {
+  items: FoodItem[];
+  logs: ActivityLogEntry[];
+}
+
 export interface StorageConfig {
-  apiKey: string; // La clé "Master Key" de JSONBin qui ne change jamais
-  binId: string;  // L'identifiant unique de votre boite de données
+  apiKey: string; // La clé API de jsonstorage.net
+  binId: string;  // L'identifiant unique de l'objet JSON (Artifact ID)
 }
 
 export const CATEGORIES: Category[] = [

@@ -1,7 +1,7 @@
 
-import { FoodItem, StorageConfig } from '../types';
+import { FoodItem, ActivityLogEntry, StorageConfig, StorageData } from '../types';
 
-const BASE_URL = 'https://api.jsonbin.io/v3/b';
+const BASE_URL = 'https://api.jsonstorage.net/v1/json';
 
 const fetchWithRetry = async (url: string, options: RequestInit, retries = 3, backoff = 300): Promise<Response> => {
   try {
@@ -23,29 +23,53 @@ const fetchWithRetry = async (url: string, options: RequestInit, retries = 3, ba
 
 export const api = {
   /**
-   * Crée une nouvelle "Bin" (Base de données) sur JSONBin
+   * Crée un nouvel objet JSON sur jsonstorage.net
    */
-  createDatabase: async (apiKey: string, initialData: FoodItem[]): Promise<string> => {
+  createDatabase: async (apiKey: string, initialItems: FoodItem[]): Promise<string> => {
     try {
-        const response = await fetchWithRetry(BASE_URL, {
+        const url = `${BASE_URL}?apiKey=${apiKey}`;
+        
+        // Nouvelle structure : items + logs
+        const initialData: StorageData = {
+            items: initialItems,
+            logs: []
+        };
+
+        const response = await fetchWithRetry(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-Master-Key': apiKey,
-                'X-Bin-Private': 'true', // La base est privée
-                'X-Bin-Name': 'FreezerManager'
             },
             body: JSON.stringify(initialData)
         });
 
         if (!response.ok) {
-             const err = await response.json();
-             throw new Error(err.message || 'Erreur création base');
+             throw new Error('Erreur création base (Vérifiez votre clé API)');
         }
 
-        const json = await response.json();
-        // JSONBin V3 retourne l'ID dans metadata.id
-        return json.metadata.id;
+        const text = await response.text();
+        if (!text) throw new Error("Réponse vide du serveur lors de la création");
+
+        let json;
+        try {
+            json = JSON.parse(text);
+        } catch (e) {
+            json = text;
+        }
+
+        let uri = "";
+        if (typeof json === 'string') {
+             uri = json;
+        } else if (typeof json === 'object' && json.uri) {
+             uri = json.uri;
+        } else {
+             throw new Error("Format de réponse inattendu lors de la création");
+        }
+
+        const parts = uri.split('/');
+        const newId = parts[parts.length - 1];
+        
+        return newId;
     } catch (error) {
         console.error("API Create Error:", error);
         throw error;
@@ -53,41 +77,52 @@ export const api = {
   },
 
   /**
-   * Vérifie si une Bin existe et est accessible
+   * Vérifie si l'ID existe
    */
-  checkConnection: async (config: StorageConfig): Promise<boolean> => {
+  checkConnection: async (config: StorageConfig): Promise<void> => {
     try {
         const url = `${BASE_URL}/${config.binId}`;
-        const response = await fetch(url, {
-            method: 'GET',
-            headers: {
-                'X-Master-Key': config.apiKey
-            }
-        });
-        return response.ok;
-    } catch (e) {
-        return false;
+        const response = await fetch(url, { method: 'GET' });
+
+        if (response.status === 404) throw new Error("BIN_NOT_FOUND");
+        if (!response.ok) throw new Error(`Erreur connexion (${response.status})`);
+    } catch (e: any) {
+        if (e.message === 'BIN_NOT_FOUND') throw e;
+        throw new Error(e.message || "Erreur réseau.");
     }
   },
 
   /**
-   * Récupère les données
+   * Récupère les données (Items + Logs)
+   * Gère la rétrocompatibilité si l'API renvoie un tableau simple
    */
-  getDatabase: async (config: StorageConfig): Promise<FoodItem[]> => {
+  getDatabase: async (config: StorageConfig): Promise<StorageData> => {
     try {
       const url = `${BASE_URL}/${config.binId}`;
-      const response = await fetchWithRetry(url, {
-        method: 'GET',
-        headers: {
-            'X-Master-Key': config.apiKey
-        }
-      });
+      const response = await fetchWithRetry(url, { method: 'GET' });
 
+      if (response.status === 404) throw new Error("BIN_NOT_FOUND");
       if (!response.ok) throw new Error(`Erreur lecture: ${response.status}`);
 
-      const json = await response.json();
-      // En V3, les données sont dans la propriété "record"
-      return json.record || [];
+      const text = await response.text();
+      
+      if (!text || text.trim() === "") {
+          return { items: [], logs: [] };
+      }
+
+      const data = JSON.parse(text);
+      
+      // Migration automatique : si c'est un tableau, on le convertit en structure objet
+      if (Array.isArray(data)) {
+          return { items: data, logs: [] };
+      }
+      
+      // Si c'est déjà le nouveau format
+      if (data.items) {
+          return { items: data.items, logs: data.logs || [] };
+      }
+
+      return { items: [], logs: [] };
     } catch (error) {
       console.error("API Get Error:", error);
       throw error;
@@ -97,19 +132,28 @@ export const api = {
   /**
    * Met à jour la base de données
    */
-  updateDatabase: async (config: StorageConfig, data: FoodItem[]): Promise<void> => {
+  updateDatabase: async (config: StorageConfig, items: FoodItem[], logs: ActivityLogEntry[]): Promise<void> => {
     try {
-      const url = `${BASE_URL}/${config.binId}`;
+      const url = `${BASE_URL}/${config.binId}?apiKey=${config.apiKey}`;
+      
+      const payload: StorageData = {
+          items,
+          logs
+      };
+
       const response = await fetchWithRetry(url, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Master-Key': config.apiKey,
-        },
-        body: JSON.stringify(data),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
       });
 
-      if (!response.ok) throw new Error(`Erreur sauvegarde: ${response.status}`);
+      if (response.status === 404) throw new Error("BIN_NOT_FOUND");
+      if (!response.ok) {
+          if (response.status === 401 || response.status === 403) {
+              throw new Error("Clé API invalide pour la mise à jour");
+          }
+          throw new Error(`Erreur sauvegarde: ${response.status}`);
+      }
     } catch (error) {
       console.error("API Update Error:", error);
       throw error;

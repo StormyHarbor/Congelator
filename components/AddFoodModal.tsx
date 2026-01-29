@@ -1,29 +1,31 @@
+
 import React, { useState } from 'react';
 import { Category, Location, CATEGORIES, LOCATIONS } from '../types';
 import { THEME } from '../constants';
-import { X } from 'lucide-react';
+import { X, Loader2 } from 'lucide-react';
 
 interface AddFoodModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAdd: (name: string, category: Category, location: Location) => void;
+  onAdd: (name: string, category: Category, location: Location) => Promise<void>;
+  isLoading: boolean;
 }
 
-export const AddFoodModal: React.FC<AddFoodModalProps> = ({ isOpen, onClose, onAdd }) => {
+export const AddFoodModal: React.FC<AddFoodModalProps> = ({ isOpen, onClose, onAdd, isLoading }) => {
   const [name, setName] = useState('');
   const [category, setCategory] = useState<Category>('Viande');
   const [location, setLocation] = useState<Location>('Tiroir Haut');
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (name.trim()) {
-      onAdd(name, category, location);
+      await onAdd(name, category, location);
+      // Reset form only after success (handled by parent usually, but good practice here)
       setName('');
       setCategory('Viande');
       setLocation('Tiroir Haut');
-      onClose();
     }
   };
 
@@ -31,13 +33,17 @@ export const AddFoodModal: React.FC<AddFoodModalProps> = ({ isOpen, onClose, onA
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div 
         className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity" 
-        onClick={onClose}
+        onClick={!isLoading ? onClose : undefined}
       />
       <div className={`bg-[#FCDFB8] w-full max-w-md rounded-3xl p-6 shadow-2xl relative z-10 animate-in fade-in zoom-in duration-200`}>
         
         <div className="flex justify-between items-center mb-6">
             <h2 className={`text-2xl font-bold ${THEME.text}`}>Ajouter un aliment</h2>
-            <button onClick={onClose} className={`p-2 rounded-full hover:bg-black/10 ${THEME.text}`}>
+            <button 
+                onClick={onClose} 
+                disabled={isLoading}
+                className={`p-2 rounded-full hover:bg-black/10 ${THEME.text} ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
                 <X size={24} />
             </button>
         </div>
@@ -48,10 +54,11 @@ export const AddFoodModal: React.FC<AddFoodModalProps> = ({ isOpen, onClose, onA
             <input
               type="text"
               required
+              disabled={isLoading}
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Ex: Escalopes de poulet"
-              className="w-full p-4 rounded-xl bg-white/60 border-none text-[#2C4642] placeholder-[#2C4642]/40 focus:ring-2 focus:ring-[#2C4642] outline-none"
+              className="w-full p-4 rounded-xl bg-white/60 border-none text-[#2C4642] placeholder-[#2C4642]/40 focus:ring-2 focus:ring-[#2C4642] outline-none disabled:opacity-50"
             />
           </div>
 
@@ -62,12 +69,13 @@ export const AddFoodModal: React.FC<AddFoodModalProps> = ({ isOpen, onClose, onA
                     <button
                         key={cat}
                         type="button"
+                        disabled={isLoading}
                         onClick={() => setCategory(cat)}
                         className={`p-3 rounded-xl text-sm font-medium transition-all ${
                             category === cat 
                             ? `${THEME.accent} text-white shadow-lg` 
                             : 'bg-white/40 text-[#5C7672] hover:bg-white/60'
-                        }`}
+                        } ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                         {cat}
                     </button>
@@ -80,7 +88,8 @@ export const AddFoodModal: React.FC<AddFoodModalProps> = ({ isOpen, onClose, onA
             <select
               value={location}
               onChange={(e) => setLocation(e.target.value as Location)}
-              className="w-full p-4 rounded-xl bg-white/60 border-none text-[#2C4642] focus:ring-2 focus:ring-[#2C4642] outline-none appearance-none cursor-pointer"
+              disabled={isLoading}
+              className="w-full p-4 rounded-xl bg-white/60 border-none text-[#2C4642] focus:ring-2 focus:ring-[#2C4642] outline-none appearance-none cursor-pointer disabled:opacity-50"
             >
               {LOCATIONS.map((loc) => (
                 <option key={loc} value={loc}>
@@ -92,9 +101,17 @@ export const AddFoodModal: React.FC<AddFoodModalProps> = ({ isOpen, onClose, onA
 
           <button
             type="submit"
-            className={`w-full py-4 mt-4 rounded-2xl ${THEME.accent} text-[#FCDFB8] font-bold text-lg hover:brightness-110 transition-all shadow-lg active:scale-95`}
+            disabled={isLoading}
+            className={`w-full py-4 mt-4 rounded-2xl ${THEME.accent} text-[#FCDFB8] font-bold text-lg hover:brightness-110 transition-all shadow-lg active:scale-95 flex items-center justify-center ${isLoading ? 'opacity-80 cursor-not-allowed' : ''}`}
           >
-            Ajouter au stock
+            {isLoading ? (
+                <>
+                    <Loader2 className="animate-spin mr-2" size={24} />
+                    <span>Sauvegarde...</span>
+                </>
+            ) : (
+                'Ajouter au stock'
+            )}
           </button>
         </form>
       </div>
