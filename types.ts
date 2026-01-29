@@ -1,3 +1,4 @@
+
 export type Category = 
   | 'Tout'
   | 'Sauce' 
@@ -19,6 +20,12 @@ export interface FoodItem {
   category: Exclude<Category, 'Tout'>;
   location: Location;
   dateAdded: string; // ISO Date String
+}
+
+export interface GCSConfig {
+  bucketName: string;
+  fileName: string;
+  accessToken: string;
 }
 
 export const CATEGORIES: Category[] = [

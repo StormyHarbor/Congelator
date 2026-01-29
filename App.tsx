@@ -1,22 +1,56 @@
-import React, { useState, useMemo } from 'react';
+
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { Search, Plus, Menu, Snowflake, Filter, X, ChevronDown, Check } from 'lucide-react';
+import { Search, Plus, Menu, Snowflake, Filter, X, ChevronDown, Check, Loader2, CloudOff } from 'lucide-react';
 import { CategoryNav } from './components/CategoryNav';
 import { FoodItemCard } from './components/FoodItemCard';
 import { AddFoodModal } from './components/AddFoodModal';
 import { StatsView } from './components/StatsView';
-import { INITIAL_ITEMS, THEME } from './constants';
-import { FoodItem, Category, Location, LOCATIONS } from './types';
+import { LoginScreen } from './components/LoginScreen';
+import { SettingsModal } from './components/SettingsModal';
+import { ChangePasswordModal } from './components/ChangePasswordModal';
+import { SyncSetup } from './components/SyncSetup';
+import { THEME } from './constants';
+import { FoodItem, Category, Location, LOCATIONS, GCSConfig } from './types';
+import { api } from './services/api';
+
+// Hardcoded users config
+const AUTHORIZED_USERS = [
+  'cyberfab.nux@gmail.com',
+  'cecile.lardy@gmail.com'
+];
+const DEFAULT_PASS = '123456';
 
 function App() {
-  const [items, setItems] = useState<FoodItem[]>(INITIAL_ITEMS);
+  // --- Auth State ---
+  const [currentUser, setCurrentUser] = useState<string | null>(() => {
+    return localStorage.getItem('congelator_user');
+  });
+
+  // --- Sync State (GCS Config) ---
+  const [gcsConfig, setGcsConfig] = useState<GCSConfig | null>(() => {
+    const saved = localStorage.getItem('congelator_gcs_config');
+    return saved ? JSON.parse(saved) : null;
+  });
+  
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncError, setSyncError] = useState(false);
+
+  // --- Data State ---
+  const [items, setItems] = useState<FoodItem[]>([]);
+  const [loadingInitial, setLoadingInitial] = useState(false);
+
+  // --- UI State ---
   const [selectedCategory, setSelectedCategory] = useState<Category>('Tout');
   const [selectedLocation, setSelectedLocation] = useState<Location | 'Tout'>('Tout');
   const [isLocationMenuOpen, setIsLocationMenuOpen] = useState(false);
-  
   const [searchQuery, setSearchQuery] = useState('');
+  
+  // Modals & Views State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [showStats, setShowStats] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isChangePassOpen, setIsChangePassOpen] = useState(false);
 
   // Filter states
   const [showFilters, setShowFilters] = useState(false);
@@ -24,31 +58,126 @@ function App() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
-  // Filter items based on category, search query, location and dates
+  // Refs for polling interval
+  const pollIntervalRef = useRef<number | null>(null);
+
+  // --- Effects ---
+
+  // Initial Load from Cloud
+  useEffect(() => {
+    if (currentUser && gcsConfig) {
+      loadDataFromCloud();
+      startPolling();
+    }
+    return () => stopPolling();
+  }, [currentUser, gcsConfig]);
+
+  const startPolling = () => {
+    stopPolling();
+    pollIntervalRef.current = window.setInterval(() => {
+        loadDataFromCloud(true); // silent load
+    }, 10000); // Poll every 10 seconds for GCS
+  };
+
+  const stopPolling = () => {
+    if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+    }
+  };
+
+  const loadDataFromCloud = async (silent = false) => {
+    if (!gcsConfig) return;
+    if (!silent) setLoadingInitial(true);
+    
+    try {
+      const data = await api.getDatabase(gcsConfig);
+      setItems(prevItems => {
+        // Simple Deep Check to avoid re-renders if data is identical
+        if (JSON.stringify(prevItems) === JSON.stringify(data)) return prevItems;
+        return data;
+      });
+      setSyncError(false);
+    } catch (err) {
+      console.error("Sync error:", err);
+      if (!silent) setSyncError(true);
+    } finally {
+      if (!silent) setLoadingInitial(false);
+    }
+  };
+
+  const saveDataToCloud = async (newItems: FoodItem[]) => {
+    if (!gcsConfig) return;
+    setIsSyncing(true);
+    try {
+      await api.updateDatabase(gcsConfig, newItems);
+      setSyncError(false);
+    } catch (err) {
+      console.error("Save error:", err);
+      setSyncError(true);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleUpdateConfig = (newConfig: GCSConfig) => {
+    setGcsConfig(newConfig);
+    localStorage.setItem('congelator_gcs_config', JSON.stringify(newConfig));
+  };
+
+  // --- Auth Handlers ---
+  const handleLogin = (email: string, pass: string): boolean => {
+    const normalizedEmail = email.trim();
+    const userMatch = AUTHORIZED_USERS.find(u => u.toLowerCase() === normalizedEmail.toLowerCase());
+    
+    if (!userMatch) return false;
+
+    const storedPass = localStorage.getItem(`pwd_${userMatch}`);
+    const validPass = storedPass ? storedPass : DEFAULT_PASS;
+
+    if (pass === validPass) {
+      setCurrentUser(userMatch);
+      localStorage.setItem('congelator_user', userMatch);
+      return true;
+    }
+    return false;
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    localStorage.removeItem('congelator_user');
+    setIsSettingsOpen(false);
+    stopPolling();
+  };
+
+  const handleChangePassword = (oldPass: string, newPass: string): boolean => {
+    if (!currentUser) return false;
+    const storedPass = localStorage.getItem(`pwd_${currentUser}`);
+    const currentValidPass = storedPass ? storedPass : DEFAULT_PASS;
+
+    if (oldPass === currentValidPass) {
+      localStorage.setItem(`pwd_${currentUser}`, newPass);
+      return true;
+    }
+    return false;
+  };
+
+  // --- Logic ---
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
-      // 1. Category Filter
       const matchesCategory = selectedCategory === 'Tout' || item.category === selectedCategory;
-      
-      // 2. Location Filter
       const matchesLocation = selectedLocation === 'Tout' || item.location === selectedLocation;
-
-      // 3. Text Search
       const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase());
 
-      // 4. Date Filter
       let matchesDate = true;
       if (startDate || endDate) {
         const itemDate = new Date(item.dateAdded);
         let targetDate = itemDate;
 
-        // If filtering by expiration, calculate the estimated expiration date (entry + 6 months)
         if (filterDateType === 'expiration') {
           targetDate = new Date(itemDate);
           targetDate.setMonth(targetDate.getMonth() + 6);
         }
-
-        // Normalize time to compare dates only
         targetDate.setHours(0, 0, 0, 0);
 
         if (startDate) {
@@ -68,8 +197,7 @@ function App() {
     });
   }, [items, selectedCategory, selectedLocation, searchQuery, startDate, endDate, filterDateType]);
 
-  // Handlers
-  const handleAddItem = (name: string, category: Category, location: Location) => {
+  const handleAddItem = async (name: string, category: Category, location: Location) => {
     const newItem: FoodItem = {
       id: uuidv4(),
       name,
@@ -77,11 +205,18 @@ function App() {
       location,
       dateAdded: new Date().toISOString(),
     };
-    setItems((prev) => [newItem, ...prev]);
+    
+    // Optimistic Update
+    const updatedItems = [newItem, ...items];
+    setItems(updatedItems);
+    await saveDataToCloud(updatedItems);
   };
 
-  const handleDeleteItem = (id: string) => {
-    setItems((prev) => prev.filter((item) => item.id !== id));
+  const handleDeleteItem = async (id: string) => {
+    // Optimistic Update
+    const updatedItems = items.filter((item) => item.id !== id);
+    setItems(updatedItems);
+    await saveDataToCloud(updatedItems);
   };
 
   const clearFilters = () => {
@@ -92,18 +227,51 @@ function App() {
 
   const hasActiveFilters = startDate !== '' || endDate !== '';
 
+  // --- Render ---
+
+  // 1. Not Logged In
+  if (!currentUser) {
+    return <LoginScreen onLogin={handleLogin} />;
+  }
+
+  // 2. Logged In but No Sync Configured
+  if (!gcsConfig) {
+    return <SyncSetup onSyncConfigured={(config) => handleUpdateConfig(config)} />;
+  }
+
+  // 3. Logged In & Synced (Main App)
   return (
     <div className="min-h-screen flex items-center justify-center p-0 md:p-8">
-      {/* Mobile-first Container - styled to look like the screenshot phone frame */}
       <div className={`w-full md:w-[400px] h-[100vh] md:h-[850px] ${THEME.bg} md:rounded-[40px] shadow-2xl overflow-hidden flex flex-col relative`}>
         
+        {/* Loading Overlay */}
+        {loadingInitial && (
+            <div className="absolute inset-0 bg-[#FCDFB8] z-50 flex flex-col items-center justify-center">
+                <Loader2 className="animate-spin text-[#2C4642] mb-4" size={40} />
+                <p className={`${THEME.text} font-medium`}>Chargement du stock...</p>
+            </div>
+        )}
+
+        {/* Sync Error Indicator */}
+        {syncError && !loadingInitial && (
+            <div className="absolute top-0 left-0 right-0 bg-red-500 text-white text-xs px-4 py-1 z-50 flex items-center justify-center">
+                <CloudOff size={12} className="mr-2" />
+                Erreur de synchronisation. Vérifiez votre Token.
+            </div>
+        )}
+
         {/* Header */}
         <header className="px-6 pt-12 pb-4 flex justify-between items-center z-20 relative">
-          <button className={`${THEME.text} p-2 hover:bg-black/5 rounded-full`}>
+          <button 
+            onClick={() => setIsSettingsOpen(true)}
+            className={`${THEME.text} p-2 hover:bg-black/5 rounded-full relative`}
+          >
             <Menu size={24} />
+            {isSyncing && (
+                <span className="absolute top-2 right-2 w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+            )}
           </button>
           
-          {/* Interactive Title for Location Filtering */}
           <div className="relative">
              <button 
                 onClick={() => setIsLocationMenuOpen(!isLocationMenuOpen)}
@@ -116,7 +284,6 @@ function App() {
                <ChevronDown size={16} className={`opacity-60 transition-transform duration-200 ${isLocationMenuOpen ? 'rotate-180' : ''}`} />
              </button>
 
-             {/* Location Dropdown Menu */}
              {isLocationMenuOpen && (
                 <>
                   <div className="fixed inset-0 z-10" onClick={() => setIsLocationMenuOpen(false)} />
@@ -148,18 +315,15 @@ function App() {
             onClick={() => setShowStats(!showStats)}
             className={`${THEME.text} p-2 hover:bg-black/5 rounded-full`}
           >
-             {/* Using a graph icon to represent stats */}
              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
           </button>
         </header>
 
-        {/* Category Navigation */}
         <CategoryNav 
           selectedCategory={selectedCategory} 
           onSelect={setSelectedCategory} 
         />
 
-        {/* Search and Filters Area */}
         <div className="px-6 mb-4">
           <div className="flex gap-3">
             <div className="relative group flex-1">
@@ -186,10 +350,8 @@ function App() {
             </button>
           </div>
 
-          {/* Collapsible Date Filters Panel */}
           {showFilters && (
              <div className="mt-3 bg-white/40 backdrop-blur-md p-4 rounded-3xl animate-in fade-in slide-in-from-top-2 border border-white/20 shadow-sm z-0 relative">
-                 
                  <div className="flex justify-between items-center mb-3">
                     <span className="text-xs font-bold uppercase tracking-widest text-[#5C7672]">Filtres par date</span>
                     {hasActiveFilters && (
@@ -198,8 +360,6 @@ function App() {
                         </button>
                     )}
                  </div>
-
-                 {/* Type selector */}
                  <div className="flex bg-black/5 p-1 rounded-xl mb-4">
                     <button 
                         className={`flex-1 py-2 rounded-lg text-xs font-bold uppercase transition-all shadow-sm ${filterDateType === 'added' ? 'bg-white text-[#2C4642]' : 'text-[#5C7672] hover:bg-white/50'}`} 
@@ -214,8 +374,6 @@ function App() {
                         Péremption
                     </button>
                  </div>
-                 
-                 {/* Date Inputs */}
                  <div className="flex gap-3">
                     <div className="flex-1">
                         <label className="text-[10px] font-bold text-[#2C4642]/70 ml-1 block mb-1 uppercase">Du</label>
@@ -240,17 +398,13 @@ function App() {
           )}
         </div>
 
-        {/* Main Content Area - Scrollable */}
         <main className="flex-1 overflow-y-auto px-6 pb-28 hide-scrollbar">
-          
-          {/* Optional Stats View */}
           {showStats && (
              <div className="animate-in slide-in-from-top-4 duration-300">
                 <StatsView items={items} />
              </div>
           )}
 
-          {/* List Title */}
           <div className="flex justify-between items-end mb-4 mt-2">
             <h2 className="text-3xl font-serif text-[#2C4642]">
                {selectedCategory === 'Tout' ? 'Tout le stock' : selectedCategory}
@@ -258,7 +412,6 @@ function App() {
             <span className="text-sm font-medium text-[#2C4642]/60 mb-1.5">{filteredItems.length} items</span>
           </div>
 
-          {/* Items List */}
           <div className="space-y-4">
             {filteredItems.length > 0 ? (
               filteredItems.map((item) => (
@@ -277,7 +430,6 @@ function App() {
           </div>
         </main>
 
-        {/* Persistent Bottom Action Bar */}
         <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-[#FCDFB8] via-[#FCDFB8] to-transparent pointer-events-none z-10">
           <div className="flex justify-between items-center pointer-events-auto">
              <button className="w-12 h-12 rounded-full bg-[#2C4642] text-[#FCDFB8] flex items-center justify-center shadow-lg hover:scale-105 transition-transform">
@@ -292,7 +444,6 @@ function App() {
                 <span>Ajouter un aliment</span>
              </button>
              
-             {/* Another persistent button (can be filter or sort, using Menu for visual balance based on screenshot ideas) */}
              <button className="w-12 h-12 rounded-full border-2 border-[#2C4642] text-[#2C4642] flex items-center justify-center hover:bg-[#2C4642]/10 transition-colors">
                 <div className="flex flex-col space-y-1 items-center">
                     <div className="w-1 h-1 bg-current rounded-full"></div>
@@ -308,6 +459,29 @@ function App() {
           isOpen={isModalOpen} 
           onClose={() => setIsModalOpen(false)} 
           onAdd={handleAddItem} 
+        />
+
+        <SettingsModal 
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
+          userEmail={currentUser}
+          onLogout={handleLogout}
+          onChangePasswordClick={() => {
+            setIsSettingsOpen(false); // Close settings, open change pass
+            setIsChangePassOpen(true);
+          }}
+          gcsConfig={gcsConfig}
+          onUpdateToken={(token) => {
+              if(gcsConfig) {
+                  handleUpdateConfig({...gcsConfig, accessToken: token});
+              }
+          }}
+        />
+
+        <ChangePasswordModal 
+          isOpen={isChangePassOpen}
+          onClose={() => setIsChangePassOpen(false)}
+          onChangePassword={handleChangePassword}
         />
       </div>
     </div>
