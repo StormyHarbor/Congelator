@@ -1,5 +1,7 @@
 
-import { FoodItem, GCSConfig } from '../types';
+import { FoodItem, StorageConfig } from '../types';
+
+const BASE_URL = 'https://api.jsonbin.io/v3/b';
 
 const fetchWithRetry = async (url: string, options: RequestInit, retries = 3, backoff = 300): Promise<Response> => {
   try {
@@ -21,94 +23,95 @@ const fetchWithRetry = async (url: string, options: RequestInit, retries = 3, ba
 
 export const api = {
   /**
-   * Vérifie la connexion au bucket (tente de lire les métadonnées ou le fichier)
+   * Crée une nouvelle "Bin" (Base de données) sur JSONBin
    */
-  checkConnection: async (config: GCSConfig): Promise<boolean> => {
+  createDatabase: async (apiKey: string, initialData: FoodItem[]): Promise<string> => {
     try {
-        // On essaie de lister le fichier pour voir si on a accès
-        const url = `https://storage.googleapis.com/storage/v1/b/${config.bucketName}/o/${encodeURIComponent(config.fileName)}`;
+        const response = await fetchWithRetry(BASE_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Master-Key': apiKey,
+                'X-Bin-Private': 'true', // La base est privée
+                'X-Bin-Name': 'FreezerManager'
+            },
+            body: JSON.stringify(initialData)
+        });
+
+        if (!response.ok) {
+             const err = await response.json();
+             throw new Error(err.message || 'Erreur création base');
+        }
+
+        const json = await response.json();
+        // JSONBin V3 retourne l'ID dans metadata.id
+        return json.metadata.id;
+    } catch (error) {
+        console.error("API Create Error:", error);
+        throw error;
+    }
+  },
+
+  /**
+   * Vérifie si une Bin existe et est accessible
+   */
+  checkConnection: async (config: StorageConfig): Promise<boolean> => {
+    try {
+        const url = `${BASE_URL}/${config.binId}`;
         const response = await fetch(url, {
             method: 'GET',
             headers: {
-                'Authorization': `Bearer ${config.accessToken}`,
-                'Accept': 'application/json'
+                'X-Master-Key': config.apiKey
             }
         });
-        
-        // 200 = Existe, 404 = N'existe pas (mais accès OK), 403/401 = Erreur Auth
-        if (response.status === 200 || response.status === 404) {
-            return true;
-        }
-        return false;
+        return response.ok;
     } catch (e) {
         return false;
     }
   },
 
   /**
-   * Initialise le fichier s'il n'existe pas
+   * Récupère les données
    */
-  initializeDatabase: async (config: GCSConfig, initialData: FoodItem[]): Promise<void> => {
-     // Check if exists first
-     try {
-         const data = await api.getDatabase(config);
-         if (data) return; // File exists, do nothing
-     } catch (e) {
-         // File likely doesn't exist, create it
-         await api.updateDatabase(config, initialData);
-     }
-  },
-
-  /**
-   * Récupère les données depuis GCS
-   */
-  getDatabase: async (config: GCSConfig): Promise<FoodItem[]> => {
+  getDatabase: async (config: StorageConfig): Promise<FoodItem[]> => {
     try {
-      // alt=media downloads the content
-      const url = `https://storage.googleapis.com/storage/v1/b/${config.bucketName}/o/${encodeURIComponent(config.fileName)}?alt=media`;
-      
+      const url = `${BASE_URL}/${config.binId}`;
       const response = await fetchWithRetry(url, {
         method: 'GET',
         headers: {
-            'Authorization': `Bearer ${config.accessToken}`,
-            'Accept': 'application/json'
+            'X-Master-Key': config.apiKey
         }
       });
 
-      if (response.status === 404) {
-        // Si le fichier n'existe pas encore, on retourne un tableau vide
-        return []; 
-      }
+      if (!response.ok) throw new Error(`Erreur lecture: ${response.status}`);
 
-      if (!response.ok) throw new Error(`Erreur GCS: ${response.status}`);
-
-      return await response.json();
+      const json = await response.json();
+      // En V3, les données sont dans la propriété "record"
+      return json.record || [];
     } catch (error) {
-      console.error("API Error (Get):", error);
+      console.error("API Get Error:", error);
       throw error;
     }
   },
 
   /**
-   * Met à jour la base de données sur GCS (Upload simple)
+   * Met à jour la base de données
    */
-  updateDatabase: async (config: GCSConfig, data: FoodItem[]): Promise<void> => {
+  updateDatabase: async (config: StorageConfig, data: FoodItem[]): Promise<void> => {
     try {
-      // Upload endpoint
-      const url = `https://storage.googleapis.com/upload/storage/v1/b/${config.bucketName}/o?uploadType=media&name=${encodeURIComponent(config.fileName)}`;
-      
+      const url = `${BASE_URL}/${config.binId}`;
       const response = await fetchWithRetry(url, {
-        method: 'POST', // GCS utilise POST pour l'upload initial ou update simple via /upload/
+        method: 'PUT',
         headers: {
-          'Authorization': `Bearer ${config.accessToken}`,
           'Content-Type': 'application/json',
+          'X-Master-Key': config.apiKey,
         },
         body: JSON.stringify(data),
       });
 
-      if (!response.ok) throw new Error(`Erreur sauvegarde GCS: ${response.status}`);
+      if (!response.ok) throw new Error(`Erreur sauvegarde: ${response.status}`);
     } catch (error) {
-      console.error("API Error (Update):", error);
+      console.error("API Update Error:", error);
       throw error;
     }
   }

@@ -1,8 +1,8 @@
 
 import React, { useState } from 'react';
 import { THEME } from '../constants';
-import { X, LogOut, KeyRound, User, Database, RefreshCw, Key } from 'lucide-react';
-import { GCSConfig } from '../types';
+import { X, LogOut, KeyRound, User, Database, RefreshCw, Key, Copy } from 'lucide-react';
+import { StorageConfig } from '../types';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -10,7 +10,7 @@ interface SettingsModalProps {
   userEmail: string;
   onLogout: () => void;
   onChangePasswordClick: () => void;
-  gcsConfig: GCSConfig | null;
+  gcsConfig: StorageConfig | null;
   onUpdateToken: (token: string) => void;
 }
 
@@ -25,6 +25,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   const [newToken, setNewToken] = useState('');
   const [showTokenInput, setShowTokenInput] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   if (!isOpen) return null;
 
@@ -33,6 +34,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         onUpdateToken(newToken.trim());
         setNewToken('');
         setShowTokenInput(false);
+    }
+  };
+
+  const copyBinId = () => {
+    if(gcsConfig?.binId) {
+        navigator.clipboard.writeText(gcsConfig.binId);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
     }
   };
 
@@ -63,12 +72,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
         {gcsConfig && (
             <div className="mb-6">
-                <p className="text-[10px] uppercase font-bold text-[#5C7672] mb-2 ml-1">Stockage Google Cloud</p>
+                <p className="text-[10px] uppercase font-bold text-[#5C7672] mb-2 ml-1">Configuration Cloud</p>
                 <div className="bg-white/40 p-3 rounded-xl mb-2">
-                    <div className="flex items-center text-xs text-[#2C4642] mb-1">
-                        <Database size={12} className="mr-2 opacity-70"/>
-                        <span className="font-mono">{gcsConfig.bucketName}</span>
+                    <div className="flex items-center justify-between text-xs text-[#2C4642] mb-2">
+                        <div className="flex items-center">
+                            <Database size={12} className="mr-2 opacity-70"/>
+                            <span className="font-mono text-[10px] opacity-70">ID BASE:</span>
+                        </div>
+                        <button onClick={copyBinId} className="flex items-center font-bold font-mono hover:text-blue-600">
+                            {gcsConfig.binId.substring(0, 8)}...
+                            <Copy size={10} className="ml-1"/>
+                        </button>
                     </div>
+                    {copied && <p className="text-[10px] text-green-600 text-right mb-1">Copié !</p>}
                 </div>
                 
                 {!showTokenInput ? (
@@ -76,7 +92,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         onClick={() => setShowTokenInput(true)}
                         className="text-xs text-[#2C4642] flex items-center hover:underline ml-1"
                     >
-                        <RefreshCw size={12} className="mr-1"/> Mettre à jour le Token
+                        <RefreshCw size={12} className="mr-1"/> Changer la clé API
                     </button>
                 ) : (
                     <div className="mt-2 animate-in fade-in slide-in-from-top-1">
@@ -85,7 +101,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 type="text" 
                                 value={newToken}
                                 onChange={e => setNewToken(e.target.value)}
-                                placeholder="Nouveau Token OAuth..."
+                                placeholder="Nouvelle Clé API..."
                                 className="flex-1 bg-white/60 rounded-lg px-2 py-1.5 text-xs text-[#2C4642] outline-none border border-[#2C4642]/20"
                              />
                              <button 

@@ -22,10 +22,9 @@ export interface FoodItem {
   dateAdded: string; // ISO Date String
 }
 
-export interface GCSConfig {
-  bucketName: string;
-  fileName: string;
-  accessToken: string;
+export interface StorageConfig {
+  apiKey: string; // La clé "Master Key" de JSONBin qui ne change jamais
+  binId: string;  // L'identifiant unique de votre boite de données
 }
 
 export const CATEGORIES: Category[] = [

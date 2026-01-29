@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { Search, Plus, Menu, Snowflake, Filter, X, ChevronDown, Check, Loader2, CloudOff } from 'lucide-react';
+import { Search, Plus, Menu, Snowflake, Filter, X, ChevronDown, Check, Loader2, CloudOff, RefreshCw, Save } from 'lucide-react';
 import { CategoryNav } from './components/CategoryNav';
 import { FoodItemCard } from './components/FoodItemCard';
 import { AddFoodModal } from './components/AddFoodModal';
@@ -9,9 +9,11 @@ import { StatsView } from './components/StatsView';
 import { LoginScreen } from './components/LoginScreen';
 import { SettingsModal } from './components/SettingsModal';
 import { ChangePasswordModal } from './components/ChangePasswordModal';
+import { DeleteConfirmModal } from './components/DeleteConfirmModal';
+import { SaveConfirmModal } from './components/SaveConfirmModal';
 import { SyncSetup } from './components/SyncSetup';
 import { THEME } from './constants';
-import { FoodItem, Category, Location, LOCATIONS, GCSConfig } from './types';
+import { FoodItem, Category, Location, LOCATIONS, StorageConfig } from './types';
 import { api } from './services/api';
 
 // Hardcoded users config
@@ -27,14 +29,15 @@ function App() {
     return localStorage.getItem('congelator_user');
   });
 
-  // --- Sync State (GCS Config) ---
-  const [gcsConfig, setGcsConfig] = useState<GCSConfig | null>(() => {
-    const saved = localStorage.getItem('congelator_gcs_config');
+  // --- Sync State (Storage Config) ---
+  const [storageConfig, setStorageConfig] = useState<StorageConfig | null>(() => {
+    const saved = localStorage.getItem('congelator_storage_config');
     return saved ? JSON.parse(saved) : null;
   });
   
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncError, setSyncError] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   // --- Data State ---
   const [items, setItems] = useState<FoodItem[]>([]);
@@ -51,6 +54,8 @@ function App() {
   const [showStats, setShowStats] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isChangePassOpen, setIsChangePassOpen] = useState(false);
+  const [itemToDelete, setItemToDelete] = useState<string | null>(null);
+  const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
 
   // Filter states
   const [showFilters, setShowFilters] = useState(false);
@@ -58,46 +63,24 @@ function App() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
-  // Refs for polling interval
-  const pollIntervalRef = useRef<number | null>(null);
-
   // --- Effects ---
 
-  // Initial Load from Cloud
+  // Initial Load from Cloud (Only once)
   useEffect(() => {
-    if (currentUser && gcsConfig) {
+    if (currentUser && storageConfig) {
       loadDataFromCloud();
-      startPolling();
     }
-    return () => stopPolling();
-  }, [currentUser, gcsConfig]);
-
-  const startPolling = () => {
-    stopPolling();
-    pollIntervalRef.current = window.setInterval(() => {
-        loadDataFromCloud(true); // silent load
-    }, 10000); // Poll every 10 seconds for GCS
-  };
-
-  const stopPolling = () => {
-    if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
-    }
-  };
+  }, [currentUser, storageConfig]);
 
   const loadDataFromCloud = async (silent = false) => {
-    if (!gcsConfig) return;
+    if (!storageConfig) return;
     if (!silent) setLoadingInitial(true);
     
     try {
-      const data = await api.getDatabase(gcsConfig);
-      setItems(prevItems => {
-        // Simple Deep Check to avoid re-renders if data is identical
-        if (JSON.stringify(prevItems) === JSON.stringify(data)) return prevItems;
-        return data;
-      });
+      const data = await api.getDatabase(storageConfig);
+      setItems(data);
       setSyncError(false);
+      setLastUpdated(new Date());
     } catch (err) {
       console.error("Sync error:", err);
       if (!silent) setSyncError(true);
@@ -106,12 +89,13 @@ function App() {
     }
   };
 
-  const saveDataToCloud = async (newItems: FoodItem[]) => {
-    if (!gcsConfig) return;
+  const saveDataToCloud = async () => {
+    if (!storageConfig) return;
     setIsSyncing(true);
     try {
-      await api.updateDatabase(gcsConfig, newItems);
+      await api.updateDatabase(storageConfig, items);
       setSyncError(false);
+      setLastUpdated(new Date());
     } catch (err) {
       console.error("Save error:", err);
       setSyncError(true);
@@ -120,9 +104,9 @@ function App() {
     }
   };
 
-  const handleUpdateConfig = (newConfig: GCSConfig) => {
-    setGcsConfig(newConfig);
-    localStorage.setItem('congelator_gcs_config', JSON.stringify(newConfig));
+  const handleUpdateConfig = (newConfig: StorageConfig) => {
+    setStorageConfig(newConfig);
+    localStorage.setItem('congelator_storage_config', JSON.stringify(newConfig));
   };
 
   // --- Auth Handlers ---
@@ -147,7 +131,6 @@ function App() {
     setCurrentUser(null);
     localStorage.removeItem('congelator_user');
     setIsSettingsOpen(false);
-    stopPolling();
   };
 
   const handleChangePassword = (oldPass: string, newPass: string): boolean => {
@@ -197,7 +180,7 @@ function App() {
     });
   }, [items, selectedCategory, selectedLocation, searchQuery, startDate, endDate, filterDateType]);
 
-  const handleAddItem = async (name: string, category: Category, location: Location) => {
+  const handleAddItem = (name: string, category: Category, location: Location) => {
     const newItem: FoodItem = {
       id: uuidv4(),
       name,
@@ -206,17 +189,20 @@ function App() {
       dateAdded: new Date().toISOString(),
     };
     
-    // Optimistic Update
-    const updatedItems = [newItem, ...items];
-    setItems(updatedItems);
-    await saveDataToCloud(updatedItems);
+    // Update local only - No auto save
+    setItems([newItem, ...items]);
   };
 
-  const handleDeleteItem = async (id: string) => {
-    // Optimistic Update
-    const updatedItems = items.filter((item) => item.id !== id);
-    setItems(updatedItems);
-    await saveDataToCloud(updatedItems);
+  const requestDelete = (id: string) => {
+    setItemToDelete(id);
+  };
+
+  const confirmDelete = () => {
+    if (itemToDelete) {
+        // Update local only - No auto save
+        setItems(items.filter((item) => item.id !== itemToDelete));
+        setItemToDelete(null);
+    }
   };
 
   const clearFilters = () => {
@@ -235,7 +221,7 @@ function App() {
   }
 
   // 2. Logged In but No Sync Configured
-  if (!gcsConfig) {
+  if (!storageConfig) {
     return <SyncSetup onSyncConfigured={(config) => handleUpdateConfig(config)} />;
   }
 
@@ -256,7 +242,7 @@ function App() {
         {syncError && !loadingInitial && (
             <div className="absolute top-0 left-0 right-0 bg-red-500 text-white text-xs px-4 py-1 z-50 flex items-center justify-center">
                 <CloudOff size={12} className="mr-2" />
-                Erreur de synchronisation. Vérifiez votre Token.
+                Erreur réseau. Vérifiez votre connexion.
             </div>
         )}
 
@@ -409,7 +395,14 @@ function App() {
             <h2 className="text-3xl font-serif text-[#2C4642]">
                {selectedCategory === 'Tout' ? 'Tout le stock' : selectedCategory}
             </h2>
-            <span className="text-sm font-medium text-[#2C4642]/60 mb-1.5">{filteredItems.length} items</span>
+            <div className="flex flex-col items-end">
+                <span className="text-sm font-medium text-[#2C4642]/60">{filteredItems.length} items</span>
+                {lastUpdated && (
+                    <span className="text-[10px] text-[#2C4642]/40">
+                        Màj: {lastUpdated.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                    </span>
+                )}
+            </div>
           </div>
 
           <div className="space-y-4">
@@ -418,7 +411,7 @@ function App() {
                 <FoodItemCard 
                   key={item.id} 
                   item={item} 
-                  onDelete={handleDeleteItem} 
+                  onDelete={requestDelete} 
                 />
               ))
             ) : (
@@ -432,8 +425,15 @@ function App() {
 
         <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-[#FCDFB8] via-[#FCDFB8] to-transparent pointer-events-none z-10">
           <div className="flex justify-between items-center pointer-events-auto">
-             <button className="w-12 h-12 rounded-full bg-[#2C4642] text-[#FCDFB8] flex items-center justify-center shadow-lg hover:scale-105 transition-transform">
-                <Search size={20} />
+             {/* Refresh Button (remplace le bouton loupe redondant) */}
+             <button 
+                onClick={() => loadDataFromCloud(false)}
+                className="w-12 h-12 rounded-full bg-[#2C4642] text-[#FCDFB8] flex items-center justify-center shadow-lg hover:scale-105 transition-transform"
+                title="Actualiser depuis le cloud"
+             >
+                <div className={loadingInitial ? 'animate-spin' : ''}>
+                    <RefreshCw size={20} />
+                </div>
              </button>
 
              <button 
@@ -444,12 +444,13 @@ function App() {
                 <span>Ajouter un aliment</span>
              </button>
              
-             <button className="w-12 h-12 rounded-full border-2 border-[#2C4642] text-[#2C4642] flex items-center justify-center hover:bg-[#2C4642]/10 transition-colors">
-                <div className="flex flex-col space-y-1 items-center">
-                    <div className="w-1 h-1 bg-current rounded-full"></div>
-                    <div className="w-1 h-1 bg-current rounded-full"></div>
-                    <div className="w-1 h-1 bg-current rounded-full"></div>
-                </div>
+             {/* Save Button (remplace les 3 points) */}
+             <button 
+                onClick={() => setIsSaveModalOpen(true)}
+                className="w-12 h-12 rounded-full border-2 border-[#2C4642] bg-[#FCDFB8] text-[#2C4642] flex items-center justify-center hover:bg-[#2C4642] hover:text-[#FCDFB8] transition-all shadow-md"
+                title="Sauvegarder dans le cloud"
+             >
+                <Save size={20} />
              </button>
           </div>
         </div>
@@ -470,10 +471,10 @@ function App() {
             setIsSettingsOpen(false); // Close settings, open change pass
             setIsChangePassOpen(true);
           }}
-          gcsConfig={gcsConfig}
+          gcsConfig={storageConfig}
           onUpdateToken={(token) => {
-              if(gcsConfig) {
-                  handleUpdateConfig({...gcsConfig, accessToken: token});
+              if(storageConfig) {
+                  handleUpdateConfig({...storageConfig, apiKey: token});
               }
           }}
         />
@@ -482,6 +483,19 @@ function App() {
           isOpen={isChangePassOpen}
           onClose={() => setIsChangePassOpen(false)}
           onChangePassword={handleChangePassword}
+        />
+
+        <DeleteConfirmModal 
+          isOpen={!!itemToDelete}
+          onClose={() => setItemToDelete(null)}
+          onConfirm={confirmDelete}
+        />
+
+        <SaveConfirmModal 
+          isOpen={isSaveModalOpen}
+          onClose={() => setIsSaveModalOpen(false)}
+          onConfirm={saveDataToCloud}
+          itemCount={items.length}
         />
       </div>
     </div>
