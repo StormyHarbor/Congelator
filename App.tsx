@@ -12,6 +12,7 @@ import { ChangePasswordModal } from './components/ChangePasswordModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
 import { DownloadConfirmModal } from './components/DownloadConfirmModal';
 import { SyncSetup } from './components/SyncSetup';
+import { EmptyState } from './components/EmptyState';
 import { THEME } from './constants';
 import { FoodItem, Category, Location, LOCATIONS, StorageConfig, ActivityLogEntry } from './types';
 import { api } from './services/api';
@@ -489,10 +490,7 @@ function App() {
                 />
               ))
             ) : (
-              <div className="text-center py-10 opacity-50">
-                <p className="text-[#2C4642] text-lg">Aucun aliment trouvé</p>
-                <p className="text-sm text-[#2C4642]/60">Essayez de modifier vos filtres</p>
-              </div>
+              <EmptyState />
             )}
           </div>
         </main>
